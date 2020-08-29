@@ -30,6 +30,7 @@ void getcmds(int time);
 void getsigcmds(unsigned int signal);
 void setupsignals();
 void sighandler(int signum);
+void buttonhandler(int sig, siginfo_t *si, void *ucontext);
 int getstatus(char *str, char *last);
 void setroot();
 void statusloop();
@@ -43,14 +44,31 @@ static int screen;
 static Window root;
 static char statusbar[LENGTH(blocks)][CMDLENGTH] = {0};
 static char statusstr[2][STATUSLENGTH];
+static char button[] = "\0";
 static int statusContinue = 1;
 static void (*writestatus) () = setroot;
 
 //opens process *cmd and stores output in *output
 void getcmd(const Block *block, char *output)
 {
+  if (block ->signal) 
+  {
+    output[0] = block->signal;
+    output++;
+  }
 	strcpy(output, block->icon);
-	FILE *cmdf = popen(block->command, "r");
+	FILE *cmdf;
+  if (button)
+  {
+    setenv("BUTTON", button, 1);
+    cmdf = popen(block->command,"r");
+    *button = '\0';
+    unsetenv("BUTTON");
+  }
+  else 
+  {
+    cmdf = popen(block->command,"r");
+  }
 	if (!cmdf)
 		return;
 	int i = strlen(block->icon);
@@ -98,12 +116,19 @@ void setupsignals()
         signal(i, dummysighandler);
 #endif
 
+  struct sigaction sa;
 	for (unsigned int i = 0; i < LENGTH(blocks); i++)
 	{
 		if (blocks[i].signal > 0)
+    {
 			signal(SIGMINUS+blocks[i].signal, sighandler);
+      sigaddset(&sa.sa_mask, SIGRTMIN+blocks[i].signal); // ignore signal when handling
+    }
 	}
 
+  sa.sa_sigaction = buttonhandler;
+  sa.sa_flags = SA_SIGINFO;
+  sigaction(SIGUSR1, &sa, NULL);
 }
 
 int getstatus(char *str, char *last)
@@ -164,6 +189,13 @@ void sighandler(int signum)
 {
 	getsigcmds(signum-SIGPLUS);
 	writestatus();
+}
+
+void buttonhandler(int sig, siginfo_t *si, void *ucontext)
+{
+  *button = '0' + si->si_value.sival_int & 0xff;
+  getsigcmds(si->si_value.sival_int >> 8);
+  writestatus();
 }
 
 void termhandler()
